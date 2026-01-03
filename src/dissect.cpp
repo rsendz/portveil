@@ -40,6 +40,23 @@ std::string ipv4_str(const uint8_t* a) {
   return std::format("{}.{}.{}.{}", a[0], a[1], a[2], a[3]);
 }
 
+const char* ip_proto_name(uint8_t p) {
+  switch (p) {
+    case 1: return "ICMP";
+    case 2: return "IGMP";
+    case 6: return "TCP";
+    case 17: return "UDP";
+    case 41: return "IPv6";
+    case 47: return "GRE";
+    case 50: return "ESP";
+    case 51: return "AH";
+    case 58: return "ICMPv6";
+    case 89: return "OSPF";
+    case 132: return "SCTP";
+    default: return "IP";
+  }
+}
+
 // Walks the frame, filling a Dissection. Sections are only emitted when
 // `detail_` is set, so the capture path stays allocation-light.
 class Dissector {
@@ -82,6 +99,7 @@ class Dissector {
     }
 
     switch (ethertype) {
+      case ETHERTYPE_IP: ipv4(off); break;
       case ETHERTYPE_ARP:
       case ETHERTYPE_REVARP: arp(off); break;
       default:
@@ -173,6 +191,41 @@ class Dissector {
     } else {
       d_.info = std::format("ARP opcode {}", op);
     }
+  }
+
+  void ipv4(uint32_t off) {
+    d_.is_ipv4 = true;
+    if (!b_.has(off, 20)) {
+      d_.proto = "IPv4";
+      d_.info = "Truncated IPv4 header";
+      return;
+    }
+    const uint8_t ihl = (b_.u8(off) & 0x0f) * 4;
+    const uint8_t proto = b_.u8(off + 9);
+    const uint16_t total_len = b_.u16(off + 2);
+    const uint16_t frag = b_.u16(off + 6);
+    d_.src = ipv4_str(b_.p + off + 12);
+    d_.dst = ipv4_str(b_.p + off + 16);
+    d_.proto = ip_proto_name(proto);
+
+    const uint32_t hdr_len = std::max<uint32_t>(ihl, 20);
+    open_section("Internet Protocol Version 4", off, hdr_len);
+    add("Version", "4", off, 1);
+    add("Header length", std::format("{} bytes", ihl), off, 1);
+    add("Differentiated services", std::format("0x{:02x}", b_.u8(off + 1)), off + 1, 1);
+    add("Total length", std::format("{}", total_len), off + 2, 2);
+    add("Identification", std::format("0x{:04x}", b_.u16(off + 4)), off + 4, 2);
+    add("Flags", std::format("{}{}", (frag & 0x4000) ? "DF" : "",
+                             (frag & 0x2000) ? " MF" : ""),
+        off + 6, 1);
+    add("Fragment offset", std::format("{}", (frag & 0x1fff) * 8), off + 6, 2);
+    add("Time to live", std::format("{}", b_.u8(off + 8)), off + 8, 1);
+    add("Protocol", std::format("{} ({})", ip_proto_name(proto), proto), off + 9, 1);
+    add("Header checksum", std::format("0x{:04x}", b_.u16(off + 10)), off + 10, 2);
+    add("Source", d_.src, off + 12, 4);
+    add("Destination", d_.dst, off + 16, 4);
+    close_section();
+
   }
 
 };
