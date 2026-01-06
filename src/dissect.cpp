@@ -226,6 +226,11 @@ class Dissector {
     add("Destination", d_.dst, off + 16, 4);
     close_section();
 
+    if ((frag & 0x1fff) != 0) { // non-first fragment: no usable L4 header
+      d_.info = std::format("Fragmented IP protocol (proto={} off={})", proto,
+                            (frag & 0x1fff) * 8);
+      return;
+    }
   }
 
 };
