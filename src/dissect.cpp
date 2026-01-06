@@ -40,6 +40,12 @@ std::string ipv4_str(const uint8_t* a) {
   return std::format("{}.{}.{}.{}", a[0], a[1], a[2], a[3]);
 }
 
+std::string ipv6_str(const uint8_t* a) {
+  char buf[INET6_ADDRSTRLEN] = {};
+  if (!inet_ntop(AF_INET6, a, buf, sizeof buf)) return "?";
+  return buf;
+}
+
 const char* ip_proto_name(uint8_t p) {
   switch (p) {
     case 1: return "ICMP";
@@ -100,6 +106,7 @@ class Dissector {
 
     switch (ethertype) {
       case ETHERTYPE_IP: ipv4(off); break;
+      case ETHERTYPE_IPV6: ipv6(off); break;
       case ETHERTYPE_ARP:
       case ETHERTYPE_REVARP: arp(off); break;
       default:
@@ -231,6 +238,33 @@ class Dissector {
                             (frag & 0x1fff) * 8);
       return;
     }
+  }
+
+  void ipv6(uint32_t off) {
+    d_.is_ipv6 = true;
+    if (!b_.has(off, 40)) {
+      d_.proto = "IPv6";
+      d_.info = "Truncated IPv6 header";
+      return;
+    }
+    uint8_t next = b_.u8(off + 6);
+    d_.src = ipv6_str(b_.p + off + 8);
+    d_.dst = ipv6_str(b_.p + off + 24);
+    d_.proto = ip_proto_name(next);
+
+    open_section("Internet Protocol Version 6", off, 40);
+    add("Version", "6", off, 1);
+    add("Traffic class", std::format("0x{:02x}", ((b_.u16(off) >> 4) & 0xff)), off, 2);
+    add("Flow label", std::format("0x{:05x}", b_.u32(off) & 0xfffff), off + 1, 3);
+    add("Payload length", std::format("{}", b_.u16(off + 4)), off + 4, 2);
+    add("Next header", std::format("{} ({})", ip_proto_name(next), next), off + 6, 1);
+    add("Hop limit", std::format("{}", b_.u8(off + 7)), off + 7, 1);
+    add("Source", d_.src, off + 8, 16);
+    add("Destination", d_.dst, off + 24, 16);
+    close_section();
+
+    // Walk the common extension headers to reach the transport header.
+    uint32_t cur = off + 40;
   }
 
 };
