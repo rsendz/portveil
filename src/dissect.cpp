@@ -265,6 +265,24 @@ class Dissector {
 
     // Walk the common extension headers to reach the transport header.
     uint32_t cur = off + 40;
+    for (int i = 0; i < 8; ++i) {
+      const bool is_ext = next == 0 || next == 43 || next == 60 || next == 51;
+      if (!is_ext) break;
+      if (!b_.has(cur, 2)) {
+        d_.info = "Truncated IPv6 extension header";
+        return;
+      }
+      const uint32_t ext_len = (next == 51) ? (b_.u8(cur + 1) + 2u) * 4u
+                                            : (b_.u8(cur + 1) + 1u) * 8u;
+      next = b_.u8(cur);
+      cur += ext_len;
+      d_.proto = ip_proto_name(next);
+    }
+    if (next == 44) { // fragment header: payload is not a full L4 header
+      d_.proto = "IPv6";
+      d_.info = "IPv6 fragment";
+      return;
+    }
   }
 
 };
