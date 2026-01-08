@@ -238,6 +238,9 @@ class Dissector {
                             (frag & 0x1fff) * 8);
       return;
     }
+    // Trust the header length only if it is sane and within the capture.
+    const uint32_t l4 = off + (ihl >= 20 ? ihl : 20);
+    transport(proto, l4);
   }
 
   void ipv6(uint32_t off) {
@@ -282,6 +285,74 @@ class Dissector {
       d_.proto = "IPv6";
       d_.info = "IPv6 fragment";
       return;
+    }
+    transport(next, cur);
+  }
+
+  void transport(uint8_t proto, uint32_t off) {
+    switch (proto) {
+      case 6: tcp(off); break;
+      default:
+        if (d_.info.empty()) {
+          d_.info = std::format("{} payload, {} bytes", ip_proto_name(proto),
+                                b_.has(off, 0) ? b_.n - off : 0);
+        }
+        break;
+    }
+  }
+
+  void tcp(uint32_t off) {
+    d_.is_tcp = true;
+    d_.proto = "TCP";
+    if (!b_.has(off, 20)) {
+      d_.info = "Truncated TCP header";
+      return;
+    }
+    const uint16_t sport = b_.u16(off);
+    const uint16_t dport = b_.u16(off + 2);
+    const uint32_t seq = b_.u32(off + 4);
+    const uint32_t ack = b_.u32(off + 8);
+    const uint8_t data_off = (b_.u8(off + 12) >> 4) * 4;
+    const uint8_t flags = b_.u8(off + 13);
+    const uint16_t win = b_.u16(off + 14);
+    d_.sport = sport;
+    d_.dport = dport;
+    d_.has_ports = true;
+
+    std::string flag_str;
+    const std::pair<uint8_t, const char*> kFlags[] = {
+        {0x01, "FIN"}, {0x02, "SYN"}, {0x04, "RST"}, {0x08, "PSH"},
+        {0x10, "ACK"}, {0x20, "URG"}, {0x40, "ECE"}, {0x80, "CWR"}};
+    for (const auto& [bit, name] : kFlags) {
+      if (flags & bit) {
+        if (!flag_str.empty()) flag_str += ", ";
+        flag_str += name;
+      }
+    }
+
+    const uint32_t hdr = std::max<uint32_t>(data_off, 20);
+    open_section("Transmission Control Protocol", off, hdr);
+    add("Source port", std::format("{}", sport), off, 2);
+    add("Destination port", std::format("{}", dport), off + 2, 2);
+    add("Sequence number", std::format("{}", seq), off + 4, 4);
+    add("Acknowledgment number", std::format("{}", ack), off + 8, 4);
+    add("Header length", std::format("{} bytes", data_off), off + 12, 1);
+    add("Flags", std::format("0x{:03x} [{}]", flags, flag_str), off + 13, 1);
+    add("Window", std::format("{}", win), off + 14, 2);
+    add("Checksum", std::format("0x{:04x}", b_.u16(off + 16)), off + 16, 2);
+    close_section();
+
+    const uint32_t payload = off + hdr;
+    const uint32_t payload_len = b_.has(payload, 0) ? b_.n - payload : 0;
+    d_.info = std::format("{} → {} [{}] Seq={} Ack={} Win={} Len={}", sport, dport,
+                          flag_str.empty() ? "none" : flag_str, seq, ack, win,
+                          payload_len);
+
+    if (payload_len == 0) return;
+    if (payload_len > 0) {
+      open_section("Payload", payload, payload_len);
+      add("Data", std::format("{} bytes", payload_len), payload, payload_len);
+      close_section();
     }
   }
 
