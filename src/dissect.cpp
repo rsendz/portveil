@@ -292,6 +292,7 @@ class Dissector {
   void transport(uint8_t proto, uint32_t off) {
     switch (proto) {
       case 6: tcp(off); break;
+      case 17: udp(off); break;
       default:
         if (d_.info.empty()) {
           d_.info = std::format("{} payload, {} bytes", ip_proto_name(proto),
@@ -354,6 +355,37 @@ class Dissector {
       add("Data", std::format("{} bytes", payload_len), payload, payload_len);
       close_section();
     }
+  }
+
+  void udp(uint32_t off) {
+    d_.is_udp = true;
+    d_.proto = "UDP";
+    if (!b_.has(off, 8)) {
+      d_.info = "Truncated UDP header";
+      return;
+    }
+    const uint16_t sport = b_.u16(off);
+    const uint16_t dport = b_.u16(off + 2);
+    const uint16_t len = b_.u16(off + 4);
+    d_.sport = sport;
+    d_.dport = dport;
+    d_.has_ports = true;
+
+    open_section("User Datagram Protocol", off, 8);
+    add("Source port", std::format("{}", sport), off, 2);
+    add("Destination port", std::format("{}", dport), off + 2, 2);
+    add("Length", std::format("{}", len), off + 4, 2);
+    add("Checksum", std::format("0x{:04x}", b_.u16(off + 6)), off + 6, 2);
+    close_section();
+
+    const uint32_t payload = off + 8;
+    const uint32_t payload_len = b_.has(payload, 0) ? b_.n - payload : 0;
+    d_.info = std::format("{} → {} Len={}", sport, dport, payload_len);
+    if (payload_len == 0) return;
+
+    open_section("Payload", payload, payload_len);
+    add("Data", std::format("{} bytes", payload_len), payload, payload_len);
+    close_section();
   }
 
 };
