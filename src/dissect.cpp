@@ -383,6 +383,11 @@ class Dissector {
     d_.info = std::format("{} → {} Len={}", sport, dport, payload_len);
     if (payload_len == 0) return;
 
+    if (sport == 443 || dport == 443) { // QUIC: label it, don't decode
+      d_.proto = "QUIC";
+      d_.info = std::format("QUIC {} → {} Len={}", sport, dport, payload_len);
+      return;
+    }
     open_section("Payload", payload, payload_len);
     add("Data", std::format("{} bytes", payload_len), payload, payload_len);
     close_section();
