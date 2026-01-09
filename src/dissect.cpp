@@ -293,6 +293,8 @@ class Dissector {
     switch (proto) {
       case 6: tcp(off); break;
       case 17: udp(off); break;
+      case 1: icmp(off, false); break;
+      case 58: icmp(off, true); break;
       default:
         if (d_.info.empty()) {
           d_.info = std::format("{} payload, {} bytes", ip_proto_name(proto),
@@ -390,6 +392,59 @@ class Dissector {
     }
     open_section("Payload", payload, payload_len);
     add("Data", std::format("{} bytes", payload_len), payload, payload_len);
+    close_section();
+  }
+
+  void icmp(uint32_t off, bool v6) {
+    d_.is_icmp = true;
+    d_.proto = v6 ? "ICMPv6" : "ICMP";
+    if (!b_.has(off, 4)) {
+      d_.info = "Truncated ICMP header";
+      return;
+    }
+    const uint8_t type = b_.u8(off);
+    const uint8_t code = b_.u8(off + 1);
+
+    std::string desc;
+    if (v6) {
+      switch (type) {
+        case 128: desc = "Echo request"; break;
+        case 129: desc = "Echo reply"; break;
+        case 133: desc = "Router solicitation"; break;
+        case 134: desc = "Router advertisement"; break;
+        case 135: desc = "Neighbor solicitation"; break;
+        case 136: desc = "Neighbor advertisement"; break;
+        case 1: desc = "Destination unreachable"; break;
+        case 3: desc = "Time exceeded"; break;
+        default: desc = std::format("Type {}", type); break;
+      }
+    } else {
+      switch (type) {
+        case 0: desc = "Echo (ping) reply"; break;
+        case 3: desc = "Destination unreachable"; break;
+        case 8: desc = "Echo (ping) request"; break;
+        case 11: desc = "Time-to-live exceeded"; break;
+        default: desc = std::format("Type {}", type); break;
+      }
+    }
+
+    open_section(v6 ? "Internet Control Message Protocol v6"
+                    : "Internet Control Message Protocol",
+                 off, 8);
+    add("Type", std::format("{} ({})", type, desc), off, 1);
+    add("Code", std::format("{}", code), off + 1, 1);
+    add("Checksum", std::format("0x{:04x}", b_.u16(off + 2)), off + 2, 2);
+
+    const bool echo = v6 ? (type == 128 || type == 129) : (type == 0 || type == 8);
+    if (echo && b_.has(off + 4, 4)) {
+      const uint16_t id = b_.u16(off + 4);
+      const uint16_t seq = b_.u16(off + 6);
+      add("Identifier", std::format("{}", id), off + 4, 2);
+      add("Sequence number", std::format("{}", seq), off + 6, 2);
+      d_.info = std::format("{}  id={} seq={}", desc, id, seq);
+    } else {
+      d_.info = desc;
+    }
     close_section();
   }
 
