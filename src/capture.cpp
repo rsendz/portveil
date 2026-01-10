@@ -22,6 +22,30 @@ double now_seconds(const timeval& tv) {
   return static_cast<double>(tv.tv_sec) + static_cast<double>(tv.tv_usec) / 1e6;
 }
 
+// An interface's most identifiable address: IPv4 first, then a routable IPv6,
+// falling back to link-local only when nothing better exists.
+std::string address_of(const pcap_addr_t* addrs) {
+  std::string ipv6;
+  std::string link_local;
+  for (const pcap_addr_t* a = addrs; a != nullptr; a = a->next) {
+    if (a->addr == nullptr) continue;
+    char buf[INET6_ADDRSTRLEN] = {};
+    if (a->addr->sa_family == AF_INET) {
+      const auto* in = reinterpret_cast<const sockaddr_in*>(a->addr);
+      if (inet_ntop(AF_INET, &in->sin_addr, buf, sizeof buf)) return buf;
+    } else if (a->addr->sa_family == AF_INET6) {
+      const auto* in6 = reinterpret_cast<const sockaddr_in6*>(a->addr);
+      if (!inet_ntop(AF_INET6, &in6->sin6_addr, buf, sizeof buf)) continue;
+      if (IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {
+        if (link_local.empty()) link_local = buf;
+      } else if (ipv6.empty()) {
+        ipv6 = buf;
+      }
+    }
+  }
+  return !ipv6.empty() ? ipv6 : link_local;
+}
+
 // pcap reports permission problems in several ways depending on the platform;
 // turn any of them into one actionable message.
 std::string permission_hint() {
@@ -50,6 +74,37 @@ bool is_permission_error(int status, const char* msg) {
 }
 
 } // namespace
+
+std::vector<Iface> list_interfaces(std::string& err) {
+  char errbuf[PCAP_ERRBUF_SIZE] = {};
+  pcap_if_t* devs = nullptr;
+  if (pcap_findalldevs(&devs, errbuf) != 0) {
+    err = is_permission_error(0, errbuf) ? permission_hint() : errbuf;
+    return {};
+  }
+
+  std::vector<Iface> out;
+  for (pcap_if_t* d = devs; d != nullptr; d = d->next) {
+    Iface i;
+    i.name = d->name ? d->name : "";
+    i.description = d->description ? d->description : "";
+    i.address = address_of(d->addresses);
+    i.up = (d->flags & PCAP_IF_UP) != 0;
+    i.loopback = (d->flags & PCAP_IF_LOOPBACK) != 0;
+    if (!i.name.empty()) out.push_back(std::move(i));
+  }
+  pcap_freealldevs(devs);
+
+  // Interfaces that are up and carrying an address are the ones people want.
+  std::stable_sort(out.begin(), out.end(), [](const Iface& a, const Iface& b) {
+    const int sa = (a.up ? 2 : 0) + (!a.address.empty() ? 1 : 0) - (a.loopback ? 1 : 0);
+    const int sb = (b.up ? 2 : 0) + (!b.address.empty() ? 1 : 0) - (b.loopback ? 1 : 0);
+    return sa > sb;
+  });
+
+  if (out.empty() && err.empty()) err = permission_hint();
+  return out;
+}
 
 Capture::~Capture() {
   stop();
