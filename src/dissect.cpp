@@ -63,6 +63,71 @@ const char* ip_proto_name(uint8_t p) {
   }
 }
 
+const char* dns_type_name(uint16_t t) {
+  switch (t) {
+    case 1: return "A";
+    case 2: return "NS";
+    case 5: return "CNAME";
+    case 6: return "SOA";
+    case 12: return "PTR";
+    case 15: return "MX";
+    case 16: return "TXT";
+    case 28: return "AAAA";
+    case 33: return "SRV";
+    case 41: return "OPT";
+    case 65: return "HTTPS";
+    case 255: return "ANY";
+    default: return "?";
+  }
+}
+
+const char* dns_rcode_name(uint8_t r) {
+  switch (r) {
+    case 0: return "No error";
+    case 1: return "Format error";
+    case 2: return "Server failure";
+    case 3: return "No such name";
+    case 4: return "Not implemented";
+    case 5: return "Refused";
+    default: return "Unknown";
+  }
+}
+
+// Reads a DNS name, following compression pointers. Returns the encoded length
+// consumed at `off` (0 on malformed input); the expanded name goes to `out`.
+uint32_t dns_name(const Bytes& b, uint32_t dns_start, uint32_t off, std::string& out) {
+  uint32_t consumed = 0;
+  bool jumped = false;
+  int guard = 0;
+
+  while (guard++ < 64) {
+    if (!b.has(off, 1)) return 0;
+    const uint8_t len = b.u8(off);
+    if (len == 0) {
+      if (!jumped) consumed += 1;
+      if (out.empty()) out = "<root>";
+      return consumed;
+    }
+    if ((len & 0xc0) == 0xc0) { // compression pointer
+      if (!b.has(off, 2)) return 0;
+      const uint32_t target = dns_start + (b.u16(off) & 0x3fff);
+      if (!jumped) consumed += 2;
+      off = target;
+      jumped = true;
+      continue;
+    }
+    if (!b.has(off + 1, len)) return 0;
+    if (!out.empty()) out.push_back('.');
+    for (uint32_t i = 0; i < len; ++i) {
+      const uint8_t c = b.p[off + 1 + i];
+      out.push_back(c >= 0x20 && c < 0x7f ? static_cast<char>(c) : '.');
+    }
+    off += 1 + len;
+    if (!jumped) consumed += 1 + len;
+  }
+  return 0;
+}
+
 // Walks the frame, filling a Dissection. Sections are only emitted when
 // `detail_` is set, so the capture path stays allocation-light.
 class Dissector {
@@ -352,6 +417,10 @@ class Dissector {
                           payload_len);
 
     if (payload_len == 0) return;
+    if (sport == 53 || dport == 53) {
+      dns(payload); // DNS over TCP is length-prefixed
+      return;
+    }
     if (payload_len > 0) {
       open_section("Payload", payload, payload_len);
       add("Data", std::format("{} bytes", payload_len), payload, payload_len);
@@ -385,6 +454,10 @@ class Dissector {
     d_.info = std::format("{} → {} Len={}", sport, dport, payload_len);
     if (payload_len == 0) return;
 
+    if (sport == 53 || dport == 53 || sport == 5353 || dport == 5353) {
+      dns(payload);
+      return;
+    }
     if (sport == 443 || dport == 443) { // QUIC: label it, don't decode
       d_.proto = "QUIC";
       d_.info = std::format("QUIC {} → {} Len={}", sport, dport, payload_len);
@@ -446,6 +519,112 @@ class Dissector {
       d_.info = desc;
     }
     close_section();
+  }
+
+  void dns(uint32_t off) {
+    // DNS over TCP prefixes the message with a 2-byte length.
+    if (d_.is_tcp) {
+      if (!b_.has(off, 2)) return;
+      off += 2;
+    }
+    if (!b_.has(off, 12)) {
+      d_.proto = "DNS";
+      d_.info = "Truncated DNS header";
+      return;
+    }
+    d_.proto = "DNS";
+    d_.l7 = L7::DNS;
+
+    const uint16_t id = b_.u16(off);
+    const uint16_t flags = b_.u16(off + 2);
+    const bool response = (flags & 0x8000) != 0;
+    const uint8_t opcode = (flags >> 11) & 0x0f;
+    const uint8_t rcode = flags & 0x0f;
+    const uint16_t qd = b_.u16(off + 4);
+    const uint16_t an = b_.u16(off + 6);
+
+    open_section("Domain Name System", off, b_.n - off);
+    add("Transaction ID", std::format("0x{:04x}", id), off, 2);
+    add("Flags", std::format("0x{:04x} ({})", flags, response ? "response" : "query"),
+        off + 2, 2);
+    add("Questions", std::format("{}", qd), off + 4, 2);
+    add("Answer RRs", std::format("{}", an), off + 6, 2);
+    add("Authority RRs", std::format("{}", b_.u16(off + 8)), off + 8, 2);
+    add("Additional RRs", std::format("{}", b_.u16(off + 10)), off + 10, 2);
+
+    std::string qname;
+    std::string qtype = "?";
+    uint32_t cur = off + 12;
+    if (qd > 0) {
+      const uint32_t used = dns_name(b_, off, cur, qname);
+      if (used > 0 && b_.has(cur + used, 4)) {
+        add("Query name", qname, cur, used);
+        const uint16_t t = b_.u16(cur + used);
+        qtype = dns_type_name(t);
+        add("Query type", std::format("{} ({})", qtype, t), cur + used, 2);
+        cur += used + 4;
+      } else {
+        cur = 0; // malformed; stop before the answer section
+      }
+      d_.host = qname;
+    }
+
+    // Decode the first answer's rdata for the common record types.
+    std::string answer;
+    std::string aname;
+    std::string atype;
+    if (response && an > 0 && cur != 0) {
+      std::string rname;
+      const uint32_t used = dns_name(b_, off, cur, rname);
+      if (used > 0 && b_.has(cur + used, 10)) {
+        const uint32_t rr = cur + used;
+        const uint16_t rtype = b_.u16(rr);
+        const uint16_t rdlen = b_.u16(rr + 8);
+        const uint32_t rdata = rr + 10;
+        aname = rname;
+        atype = dns_type_name(rtype);
+        add("Answer name", rname, cur, used);
+        add("Answer type", std::format("{} ({})", dns_type_name(rtype), rtype), rr, 2);
+        add("TTL", std::format("{}", b_.u32(rr + 4)), rr + 4, 4);
+        if (rtype == 1 && rdlen == 4 && b_.has(rdata, 4)) {
+          answer = ipv4_str(b_.p + rdata);
+          add("Address", answer, rdata, 4);
+        } else if (rtype == 28 && rdlen == 16 && b_.has(rdata, 16)) {
+          answer = ipv6_str(b_.p + rdata);
+          add("Address", answer, rdata, 16);
+        } else if (rtype == 5 && b_.has(rdata, rdlen)) {
+          std::string cname;
+          if (dns_name(b_, off, rdata, cname) > 0) {
+            answer = cname;
+            add("CNAME", cname, rdata, rdlen);
+          }
+        }
+      }
+    }
+    close_section();
+
+    // mDNS announcements carry no question, so fall back to the first answer.
+    std::string name = qname;
+    std::string type = qtype;
+    if (name.empty() && !aname.empty()) {
+      name = aname;
+      type = atype;
+      d_.host = aname;
+    }
+
+    const char* kind = opcode == 0 ? "Standard query" : "Query";
+    if (!response) {
+      d_.info = std::format("{} 0x{:04x} {} {}", kind, id, type, name);
+    } else if (rcode != 0) {
+      d_.info = std::format("{} response 0x{:04x} {} {} — {}", kind, id, type, name,
+                            dns_rcode_name(rcode));
+    } else if (!answer.empty()) {
+      d_.info =
+          std::format("{} response 0x{:04x} {} {} → {}", kind, id, type, name, answer);
+    } else {
+      d_.info = std::format("{} response 0x{:04x} {} {}", kind, id, type, name);
+    }
+    if (an > 1) d_.info += std::format(" (+{} more)", an - 1);
   }
 
 };
