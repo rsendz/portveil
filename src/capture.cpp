@@ -213,6 +213,12 @@ void Capture::loop() {
 
     // libpcap is not safe to call concurrently on one handle, so the kernel
     // drop counter is sampled here rather than from the UI thread.
+    if (captured_.load(std::memory_order_relaxed) % 64 == 0) {
+      pcap_stat st{};
+      if (pcap_stats(p, &st) == 0) {
+        kernel_dropped_.store(st.ps_drop + st.ps_ifdrop, std::memory_order_relaxed);
+      }
+    }
   }
   running_.store(false);
 }
