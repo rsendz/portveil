@@ -112,10 +112,12 @@ uint32_t dns_name(const Bytes& b, uint32_t dns_start, uint32_t off, std::string&
       if (!b.has(off, 2)) return 0;
       const uint32_t target = dns_start + (b.u16(off) & 0x3fff);
       if (!jumped) consumed += 2;
+      if (target >= off) return 0; // pointers must point backwards
       off = target;
       jumped = true;
       continue;
     }
+    if ((len & 0xc0) != 0) return 0; // reserved label type
     if (!b.has(off + 1, len)) return 0;
     if (!out.empty()) out.push_back('.');
     for (uint32_t i = 0; i < len; ++i) {
