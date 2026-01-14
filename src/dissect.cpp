@@ -93,6 +93,17 @@ const char* dns_rcode_name(uint8_t r) {
   }
 }
 
+const char* tls_version_name(uint16_t v) {
+  switch (v) {
+    case 0x0300: return "SSL 3.0";
+    case 0x0301: return "TLS 1.0";
+    case 0x0302: return "TLS 1.1";
+    case 0x0303: return "TLS 1.2";
+    case 0x0304: return "TLS 1.3";
+    default: return "TLS";
+  }
+}
+
 // Reads a DNS name, following compression pointers. Returns the encoded length
 // consumed at `off` (0 on malformed input); the expanded name goes to `out`.
 uint32_t dns_name(const Bytes& b, uint32_t dns_start, uint32_t off, std::string& out) {
@@ -423,6 +434,7 @@ class Dissector {
       dns(payload); // DNS over TCP is length-prefixed
       return;
     }
+    if (tls(payload)) return;
     if (payload_len > 0) {
       open_section("Payload", payload, payload_len);
       add("Data", std::format("{} bytes", payload_len), payload, payload_len);
@@ -629,6 +641,94 @@ class Dissector {
     if (an > 1) d_.info += std::format(" (+{} more)", an - 1);
   }
 
+  // Returns true if the payload parsed as a TLS record.
+  bool tls(uint32_t off) {
+    if (!b_.has(off, 5)) return false;
+    const uint8_t type = b_.u8(off);
+    const uint16_t ver = b_.u16(off + 1);
+    const uint16_t len = b_.u16(off + 3);
+    if (type < 20 || type > 24) return false;
+    if ((ver >> 8) != 0x03) return false;
+
+    d_.proto = "TLS";
+    d_.l7 = L7::TLS;
+
+    const char* type_name = "Record";
+    switch (type) {
+      case 20: type_name = "Change Cipher Spec"; break;
+      case 21: type_name = "Alert"; break;
+      case 22: type_name = "Handshake"; break;
+      case 23: type_name = "Application Data"; break;
+      default: break;
+    }
+
+    open_section("Transport Layer Security", off, std::min<uint32_t>(len + 5, b_.n - off));
+    add("Content type", std::format("{} ({})", type_name, type), off, 1);
+    add("Version", std::format("{} (0x{:04x})", tls_version_name(ver), ver), off + 1, 2);
+    add("Length", std::format("{}", len), off + 3, 2);
+
+    std::string summary = type_name;
+    if (type == 22 && b_.has(off + 5, 4)) {
+      const uint8_t hs = b_.u8(off + 5);
+      switch (hs) {
+        case 1: summary = "Client Hello"; break;
+        case 2: summary = "Server Hello"; break;
+        case 4: summary = "New Session Ticket"; break;
+        case 11: summary = "Certificate"; break;
+        case 12: summary = "Server Key Exchange"; break;
+        case 16: summary = "Client Key Exchange"; break;
+        case 20: summary = "Finished"; break;
+        default: summary = std::format("Handshake type {}", hs); break;
+      }
+      add("Handshake type", std::format("{} ({})", summary, hs), off + 5, 1);
+      if (hs == 1) {
+        std::string sni;
+        if (client_hello_sni(off + 9, sni) && !sni.empty()) {
+          d_.host = sni;
+          add("Server Name Indication", sni, off + 9, 0);
+          summary += std::format(" (SNI={})", sni);
+        }
+      }
+    }
+    close_section();
+    d_.info = std::format("{} — {}", tls_version_name(ver), summary);
+    return true;
+  }
+
+  // Walks a ClientHello body to the server_name extension. `off` is the first
+  // byte after the handshake header (i.e. client_version).
+  bool client_hello_sni(uint32_t off, std::string& sni) {
+    if (!b_.has(off, 34)) return false;
+    uint32_t cur = off + 34; // client_version(2) + random(32)
+
+    if (!b_.has(cur, 1)) return false;
+    cur += 1 + b_.u8(cur); // session id
+
+    if (!b_.has(cur, 2)) return false;
+    cur += 2 + b_.u16(cur); // cipher suites
+
+    if (!b_.has(cur, 1)) return false;
+    cur += 1 + b_.u8(cur); // compression methods
+
+    if (!b_.has(cur, 2)) return false;
+    const uint32_t ext_end = cur + 2 + b_.u16(cur);
+    cur += 2;
+
+    while (cur + 4 <= ext_end && b_.has(cur, 4)) {
+      const uint16_t ext_type = b_.u16(cur);
+      const uint16_t ext_len = b_.u16(cur + 2);
+      const uint32_t body = cur + 4;
+      if (ext_type == 0) { // server_name
+        if (!b_.has(body, 5)) return false;
+        const uint16_t name_len = b_.u16(body + 3);
+        if (!b_.has(body + 5, name_len)) return false;
+        sni.assign(reinterpret_cast<const char*>(b_.p + body + 5), name_len);
+        return true;
+      }
+      cur = body + ext_len;
+    }
+    return false;
+  }
 };
 
 } // namespace
