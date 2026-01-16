@@ -104,6 +104,46 @@ const char* tls_version_name(uint16_t v) {
   }
 }
 
+bool looks_like_http(const Bytes& b, uint32_t off) {
+  static constexpr std::array<const char*, 10> kPrefixes = {
+      "GET ", "POST ", "PUT ", "HEAD ", "DELETE ", "OPTIONS ",
+      "PATCH ", "TRACE ", "CONNECT ", "HTTP/"};
+  for (const char* pre : kPrefixes) {
+    const auto len = static_cast<uint32_t>(std::strlen(pre));
+    if (b.has(off, len) && std::memcmp(b.p + off, pre, len) == 0) return true;
+  }
+  return false;
+}
+
+// First CRLF/LF-terminated line, with unprintable bytes dropped.
+std::string first_line(const Bytes& b, uint32_t off, uint32_t max_len = 120) {
+  std::string out;
+  for (uint32_t i = off; i < b.n && out.size() < max_len; ++i) {
+    const uint8_t c = b.p[i];
+    if (c == '\r' || c == '\n') break;
+    out.push_back(c >= 0x20 && c < 0x7f ? static_cast<char>(c) : '.');
+  }
+  return out;
+}
+
+// Case-insensitive lookup of an HTTP header value in the payload.
+std::string http_header(const Bytes& b, uint32_t off, std::string_view name) {
+  std::string text(reinterpret_cast<const char*>(b.p + off), b.n - off);
+  std::string lower = text;
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::string needle = "\n";
+  needle += name;
+  needle += ":";
+  const size_t pos = lower.find(needle);
+  if (pos == std::string::npos) return {};
+  size_t start = pos + needle.size();
+  while (start < text.size() && (text[start] == ' ' || text[start] == '\t')) ++start;
+  size_t end = start;
+  while (end < text.size() && text[end] != '\r' && text[end] != '\n') ++end;
+  return text.substr(start, end - start);
+}
+
 // Reads a DNS name, following compression pointers. Returns the encoded length
 // consumed at `off` (0 on malformed input); the expanded name goes to `out`.
 uint32_t dns_name(const Bytes& b, uint32_t dns_start, uint32_t off, std::string& out) {
@@ -434,6 +474,10 @@ class Dissector {
       dns(payload); // DNS over TCP is length-prefixed
       return;
     }
+    if (looks_like_http(b_, payload)) {
+      http(payload);
+      return;
+    }
     if (tls(payload)) return;
     if (payload_len > 0) {
       open_section("Payload", payload, payload_len);
@@ -639,6 +683,23 @@ class Dissector {
       d_.info = std::format("{} response 0x{:04x} {} {}", kind, id, type, name);
     }
     if (an > 1) d_.info += std::format(" (+{} more)", an - 1);
+  }
+
+  void http(uint32_t off) {
+    d_.proto = "HTTP";
+    d_.l7 = L7::HTTP;
+    const std::string line = first_line(b_, off);
+    const std::string host = http_header(b_, off, "host");
+    const std::string ua = http_header(b_, off, "user-agent");
+    if (!host.empty()) d_.host = host;
+
+    open_section("Hypertext Transfer Protocol", off, b_.n - off);
+    add("Request line", line, off, static_cast<uint32_t>(line.size()));
+    if (!host.empty()) add("Host", host, off, 0);
+    if (!ua.empty()) add("User-Agent", ua, off, 0);
+    close_section();
+
+    d_.info = host.empty() ? line : std::format("{}  (Host: {})", line, host);
   }
 
   // Returns true if the payload parsed as a TLS record.
