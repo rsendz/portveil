@@ -478,6 +478,43 @@ class App {
                  focus_ == Pane::List);
   }
 
+  Element detail_pane() {
+    const int height = view_height(detail_box_, default_pane_h());
+    scroll_to(detail_scroll_, detail_sel_, height, static_cast<int>(tree_.size()));
+
+    Elements rows;
+    if (tree_.empty()) rows.push_back(text("  Select a packet.") | color(th().dim));
+
+    const int last = std::min(static_cast<int>(tree_.size()), detail_scroll_ + height);
+    for (int i = detail_scroll_; i < last; ++i) {
+      const TreeRow& r = tree_[i];
+      const Section& sec = detail_.sections[r.section];
+      Element row;
+      if (r.field < 0) {
+        row = hbox({
+            text(collapsed_[r.section] ? "▸ " : "▾ ") | color(th().dim),
+            text(sec.name) | bold | color(section_color(r.section)),
+            text(std::format("  ({} bytes)", sec.length)) | color(th().dim),
+        });
+      } else {
+        const Field& f = sec.fields[r.field];
+        row = hbox({
+            text("    "),
+            text(f.name + ": ") | color(th().muted),
+            text(f.value) | color(th().text),
+        });
+      }
+      if (i == detail_sel_) {
+        row = row | bgcolor(focus_ == Pane::Detail ? th().sel_bg : th().sel_bg_idle);
+      }
+      rows.push_back(row);
+    }
+
+    return panel("Details",
+                 vbox({vbox(std::move(rows)), filler()}) | reflect(detail_box_),
+                 focus_ == Pane::Detail);
+  }
+
   Element status_bar() {
 
     Elements left;
@@ -608,6 +645,9 @@ class App {
     if (e == Event::Home || e == Event::Character('g')) return jump(true);
     if (e == Event::End || e == Event::Character('G')) return jump(false);
 
+    if (focus_ == Pane::Detail && (e == Event::Return || e == Event::Character(' '))) {
+      return toggle();
+    }
     return false;
   }
 
@@ -630,6 +670,14 @@ class App {
         refresh_detail();
         return true;
       }
+      case Pane::Detail: {
+        if (tree_.empty()) return true;
+        detail_sel_ =
+            std::clamp(detail_sel_ + delta, 0, static_cast<int>(tree_.size()) - 1);
+        const auto [off, len] = highlight();
+        if (len > 0) hex_cursor_ = off;
+        return true;
+      }
     }
     return false;
   }
@@ -649,6 +697,42 @@ class App {
     return false;
   }
 
+  bool expand(bool open) {
+    if (tree_.empty()) return true;
+    const TreeRow& r = tree_[detail_sel_];
+    if (open) {
+      if (collapsed_[r.section]) {
+        collapsed_[r.section] = false;
+        rebuild_tree();
+      } else if (r.field < 0 && detail_sel_ + 1 < static_cast<int>(tree_.size())) {
+        ++detail_sel_; // step into the layer
+      }
+      return true;
+    }
+    if (r.field >= 0) {
+      // Move up to the section header first, then collapse on a second press.
+      for (int i = detail_sel_; i >= 0; --i) {
+        if (tree_[i].field < 0) {
+          detail_sel_ = i;
+          break;
+        }
+      }
+      return true;
+    }
+    collapsed_[r.section] = true;
+    rebuild_tree();
+    return true;
+  }
+
+  bool toggle() {
+    if (tree_.empty()) return true;
+    const TreeRow& r = tree_[detail_sel_];
+    if (r.field < 0) {
+      collapsed_[r.section] = !collapsed_[r.section];
+      rebuild_tree();
+    }
+    return true;
+  }
 };
 
 } // namespace
