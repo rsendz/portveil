@@ -193,6 +193,28 @@ struct TreeRow {
   int field = -1; // -1 marks the section header row
 };
 
+// Geometry of one hex row: "0000  " then 3 columns per byte with a gap after
+// the middle group, a spacer, then the ASCII gutter.
+struct HexLayout {
+  int per_row;
+  int offset_w = 6;
+  int hex_at(int c) const { return offset_w + c * 3 + (c >= per_row / 2 ? 1 : 0); }
+  int ascii_start() const { return offset_w + per_row * 3 + 2; }
+  int ascii_at(int c) const { return ascii_start() + c + (c >= per_row / 2 ? 1 : 0); }
+  int width() const { return ascii_at(per_row - 1) + 1; }
+
+  // Byte column under a pane-relative x, or -1. A byte owns the blank that
+  // follows it, so pointing between two digits still lands on one.
+  int column_at(int rx) const {
+    for (int c = 0; c < per_row; ++c) {
+      const int s = hex_at(c);
+      if (rx >= s && rx < s + 3) return c;
+      if (rx == ascii_at(c)) return c;
+    }
+    return -1;
+  }
+};
+
 class App {
  public:
   explicit App(Capture& cap) : cap_(cap) {}
@@ -383,6 +405,7 @@ class App {
     Element main = vbox({
                        title_bar(),
                        list_pane() | flex,
+                       hbox({detail_pane() | flex, hex_pane()}) | flex,
                        status_bar(),
                    }) |
                    bgcolor(th().bg) | color(th().text);
@@ -513,6 +536,98 @@ class App {
     return panel("Details",
                  vbox({vbox(std::move(rows)), filler()}) | reflect(detail_box_),
                  focus_ == Pane::Detail);
+  }
+
+  Element hex_pane() {
+    const Packet* p = selected();
+    // Sized from the full-width packet list rather than this pane's own width,
+    // which would otherwise feed back into the width chosen here.
+    const int screen_w = box_width(list_box_);
+    const HexLayout lay{(screen_w == 0 || screen_w >= 110) ? 16 : 8};
+    hex_per_row_ = lay.per_row;
+    const int pane_w = lay.width() + 2;
+
+    if (p == nullptr || p->bytes.empty()) {
+      return panel("Bytes", vbox({text("  No data.") | color(th().dim), filler()}),
+                   focus_ == Pane::Hex) |
+             size(WIDTH, EQUAL, pane_w);
+    }
+
+    std::vector<int> owner(p->bytes.size(), -1);
+    for (size_t s = 0; s < detail_.sections.size(); ++s) {
+      const Section& sec = detail_.sections[s];
+      for (uint32_t i = sec.offset; i < sec.offset + sec.length && i < owner.size(); ++i) {
+        owner[i] = static_cast<int>(s);
+      }
+    }
+
+    const auto [hl_off, hl_len] = highlight();
+    hex_cursor_ = std::min<uint32_t>(hex_cursor_,
+                                     static_cast<uint32_t>(p->bytes.size()) - 1);
+    const int total_rows =
+        (static_cast<int>(p->bytes.size()) + lay.per_row - 1) / lay.per_row;
+    hex_rows_ = total_rows;
+    const int height = view_height(hex_box_, default_pane_h());
+    hex_scroll_ = std::clamp(hex_scroll_, 0, std::max(0, total_rows - height));
+
+    // Keep whatever the panes agree is current on screen.
+    if (hex_active()) {
+      scroll_to(hex_scroll_, static_cast<int>(hex_cursor_) / lay.per_row, height,
+                total_rows);
+    } else if (hl_len > 0 && focus_ == Pane::Detail) {
+      scroll_to(hex_scroll_, static_cast<int>(hl_off) / lay.per_row, height, total_rows);
+    }
+
+    Elements rows;
+    const int last = std::min(total_rows, hex_scroll_ + height);
+    for (int r = hex_scroll_; r < last; ++r) {
+      const size_t start = static_cast<size_t>(r) * lay.per_row;
+      Elements hex, ascii;
+      for (int c = 0; c < lay.per_row; ++c) {
+        const size_t i = start + c;
+        if (i >= p->bytes.size()) {
+          hex.push_back(text("   "));
+          ascii.push_back(text(" "));
+        } else {
+          const uint8_t b = p->bytes[i];
+          const bool in_field = hl_len > 0 && i >= hl_off && i < hl_off + hl_len;
+          const bool is_cursor = hex_active() && i == hex_cursor_;
+
+          Element h = text(std::format("{:02x} ", b));
+          Element a = text(
+              std::string(1, b >= 0x20 && b < 0x7f ? static_cast<char>(b) : '.'));
+          if (is_cursor) {
+            const auto style = bgcolor(th().accent) | color(th().on_accent) | bold;
+            h = h | style;
+            a = a | style;
+          } else if (in_field) {
+            const auto style = bgcolor(th().hl_bg) | color(th().hl_fg);
+            h = h | style;
+            a = a | style;
+          } else {
+            const Color oc = owner[i] >= 0 ? section_color(owner[i]) : th().dim;
+            h = h | color(oc);
+            a = a | color(oc);
+          }
+          hex.push_back(std::move(h));
+          ascii.push_back(std::move(a));
+        }
+        if (c == lay.per_row / 2 - 1) {
+          hex.push_back(text(" "));
+          ascii.push_back(text(" "));
+        }
+      }
+      rows.push_back(hbox({
+          text(std::format("{:04x}  ", start)) | color(th().dim),
+          hbox(std::move(hex)),
+          text(" "),
+          hbox(std::move(ascii)),
+      }));
+    }
+
+    return panel("Bytes", vbox({vbox(std::move(rows)), filler()}) | reflect(hex_box_),
+                 focus_ == Pane::Hex) |
+           size(WIDTH, EQUAL, pane_w);
   }
 
   Element status_bar() {
