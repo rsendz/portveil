@@ -631,6 +631,16 @@ class App {
   }
 
   Element status_bar() {
+    if (editing_filter_) {
+      return hbox({
+                 text(" filter ") | color(th().on_accent) | bgcolor(th().accent) | bold,
+                 text(" " + filter_draft_) | color(th().text),
+                 text("▏") | color(th().accent) | blink,
+                 filler(),
+                 text("enter apply · esc cancel ") | color(th().dim),
+             }) |
+             bgcolor(th().bar_bg);
+    }
 
     Elements left;
     if (!filter_.error().empty()) {
@@ -710,6 +720,7 @@ class App {
 
   bool on_event(Event& e) {
     if (e == Event::Custom) return true;
+    if (editing_filter_) return filter_event(e);
 
     if (e == Event::Character('q')) {
       if (screen_ != nullptr) screen_->Exit();
@@ -740,6 +751,11 @@ class App {
                                      : Pane::List;
       return true;
     }
+    if (e == Event::Character('/')) {
+      editing_filter_ = true;
+      filter_draft_ = filter_.text();
+      return true;
+    }
     if (e == Event::Character('p')) {
       cap_.set_paused(!cap_.paused());
       return true;
@@ -764,6 +780,28 @@ class App {
       return toggle();
     }
     return false;
+  }
+
+  bool filter_event(const Event& e) {
+    if (e == Event::Escape) {
+      editing_filter_ = false;
+      return true;
+    }
+    if (e == Event::Return) {
+      editing_filter_ = false;
+      filter_.set(filter_draft_);
+      refilter();
+      return true;
+    }
+    if (e == Event::Backspace) {
+      if (!filter_draft_.empty()) filter_draft_.pop_back();
+      return true;
+    }
+    if (e.is_character()) {
+      filter_draft_ += e.character();
+      return true;
+    }
+    return true; // swallow everything else while editing
   }
 
   int page() const {
