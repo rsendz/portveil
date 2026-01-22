@@ -721,6 +721,7 @@ class App {
   bool on_event(Event& e) {
     if (e == Event::Custom) return true;
     if (editing_filter_) return filter_event(e);
+    if (e.is_mouse()) return mouse_event(e);
 
     if (e == Event::Character('q')) {
       if (screen_ != nullptr) screen_->Exit();
@@ -802,6 +803,62 @@ class App {
       return true;
     }
     return true; // swallow everything else while editing
+  }
+
+  bool mouse_event(Event& e) {
+    const Mouse& m = e.mouse();
+    auto inside = [&](const Box& b) {
+      return m.y >= b.y_min && m.y <= b.y_max && m.x >= b.x_min && m.x <= b.x_max;
+    };
+    const bool in_list = inside(list_box_);
+    const bool in_detail = inside(detail_box_);
+    const bool in_hex = inside(hex_box_);
+
+    // Bare motion (no button) reads as Mouse::None: treat it as hover, which
+    // points the bytes pane without stealing keyboard focus.
+
+    if (m.button == Mouse::WheelUp || m.button == Mouse::WheelDown) {
+      const int delta = m.button == Mouse::WheelUp ? -3 : 3;
+      if (in_list) {
+        focus_ = Pane::List;
+        return move(delta);
+      }
+      if (in_detail) {
+        focus_ = Pane::Detail;
+        return move(delta);
+      }
+      if (in_hex) {
+        focus_ = Pane::Hex;
+        return move(delta);
+      }
+      return false;
+    }
+
+    if (m.button == Mouse::Left && m.motion == Mouse::Pressed) {
+      if (in_list) {
+        focus_ = Pane::List;
+        // Row 0 of the list pane is the column header.
+        const int row = list_scroll_ + (m.y - list_box_.y_min) - 1;
+        if (row >= 0 && row < static_cast<int>(shown_.size())) {
+          sel_ = row;
+          follow_ = false;
+          refresh_detail();
+        }
+        return true;
+      }
+      if (in_detail) {
+        focus_ = Pane::Detail;
+        const int row = detail_scroll_ + (m.y - detail_box_.y_min);
+        if (row >= 0 && row < static_cast<int>(tree_.size())) {
+          detail_sel_ = row;
+          const auto [off, len] = highlight();
+          if (len > 0) hex_cursor_ = off;
+          if (tree_[row].field < 0) toggle();
+        }
+        return true;
+      }
+    }
+    return false;
   }
 
   int page() const {
