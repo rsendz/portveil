@@ -947,6 +947,104 @@ class App {
 
 } // namespace
 
+std::optional<std::string> pick_interface(const std::vector<Iface>& ifaces) {
+  if (ifaces.empty()) return std::nullopt;
+
+  auto screen = ScreenInteractive::Fullscreen();
+  screen.SetCursor({0, 0, Screen::Cursor::Hidden});
+  int sel = 0;
+  int scroll = 0;
+  std::optional<std::string> chosen;
+  Box list_box;
+
+  auto renderer = Renderer([&] {
+    // Nothing posts a redraw here, so the first frame has to be right: fall
+    // back to the terminal height until the box has been reflected.
+    const int height = view_height(list_box, std::max(1, Terminal::Size().dimy - 4));
+    scroll_to(scroll, sel, height, static_cast<int>(ifaces.size()));
+
+    Elements rows;
+    const int last = std::min(static_cast<int>(ifaces.size()), scroll + height);
+    for (int i = scroll; i < last; ++i) {
+      const Iface& f = ifaces[i];
+      std::string tag;
+      if (f.loopback) tag = "loopback";
+      else if (!f.up) tag = "down";
+
+      Element row = hbox({
+          text(i == sel ? " ▸ " : "   ") | color(th().accent),
+          text(f.name) | size(WIDTH, EQUAL, 16) | bold,
+          text(f.address.empty() ? "—" : f.address) | size(WIDTH, EQUAL, 40) |
+              color(f.address.empty() ? th().dim : th().text),
+          text(tag) | color(th().dim) | flex,
+      });
+      if (i == sel) row = row | bgcolor(th().sel_bg);
+      rows.push_back(row);
+    }
+
+    return vbox({
+               hbox({
+                   text(" portveil ") | bold | color(th().on_accent) |
+                       bgcolor(th().accent),
+                   text(std::format(" {} interfaces — choose one to capture on",
+                                    ifaces.size())) |
+                       color(th().text),
+                   filler(),
+               }) | bgcolor(th().bar_bg),
+               window(text(" Interfaces ") | bold | color(th().accent),
+                      vbox({vbox(std::move(rows)), filler()}) | reflect(list_box)) |
+                   color(th().dim) | flex,
+               hbox({
+                   text(" ↑ ↓ move · enter select · t theme · q quit ") | color(th().dim),
+                   filler(),
+               }) | bgcolor(th().bar_bg),
+           }) |
+           bgcolor(th().bg) | color(th().text);
+  });
+
+  renderer |= CatchEvent([&](Event e) {
+    if (e == Event::Character('q') || e == Event::Escape) {
+      screen.Exit();
+      return true;
+    }
+    if (e == Event::ArrowUp || e == Event::Character('k')) {
+      sel = std::max(0, sel - 1);
+      return true;
+    }
+    if (e == Event::ArrowDown || e == Event::Character('j')) {
+      sel = std::min(static_cast<int>(ifaces.size()) - 1, sel + 1);
+      return true;
+    }
+    if (e == Event::Home || e == Event::Character('g')) {
+      sel = 0;
+      return true;
+    }
+    if (e == Event::End || e == Event::Character('G')) {
+      sel = static_cast<int>(ifaces.size()) - 1;
+      return true;
+    }
+    if (e == Event::Return) {
+      chosen = ifaces[sel].name;
+      screen.Exit();
+      return true;
+    }
+    if (e.is_mouse() && e.mouse().button == Mouse::Left &&
+        e.mouse().motion == Mouse::Pressed) {
+      const int row = scroll + (e.mouse().y - list_box.y_min);
+      if (row >= 0 && row < static_cast<int>(ifaces.size())) {
+        sel = row;
+        chosen = ifaces[sel].name;
+        screen.Exit();
+      }
+      return true;
+    }
+    return false;
+  });
+
+  screen.Loop(renderer);
+  return chosen;
+}
+
 void run_ui(Capture& cap) {
   App app(cap);
   app.run();
