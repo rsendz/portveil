@@ -42,6 +42,29 @@ capture on, most useful first.
 The mouse works too: scroll any pane, click a packet to select it, click a
 layer to fold it.
 
+### Display filters
+
+Press `/` and type space-separated terms. Every term has to match.
+
+| Term | Matches |
+| --- | --- |
+| `tcp` `udp` `icmp` `arp` `dns` `tls` `http` `quic` `ipv4` `ipv6` | that protocol |
+| `port 443` | that port, on either side |
+| `host example.com` | an address, TLS SNI, HTTP `Host`, or DNS name containing it |
+| `len>500` `len<100` `len=64` | frame length on the wire |
+| anything else | substring of the Info column |
+
+So `tls host github` shows TLS records to or from anything with "github" in
+its name, and `dns len>200` finds the chunky DNS responses.
+
+That filter only changes what the list shows. Capture keeps running, so
+clearing it brings the hidden packets back. To drop traffic before it ever
+reaches portveil, use `-f` with a libpcap expression instead:
+
+```sh
+portveil -i en0 -f "tcp port 443 or udp port 53"
+```
+
 ## Build from source
 
 Needs CMake 3.22+, a C++20 compiler, and libpcap headers. FTXUI is fetched
