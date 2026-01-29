@@ -144,10 +144,14 @@ cmake --build "$BUILD" -j "$JOBS" >/dev/null || die "build failed"
 # --- install -----------------------------------------------------------------
 
 step "Installing to $BIN_DIR/portveil"
-if [ -w "$BIN_DIR" ] 2>/dev/null; then
+# Create the directory before testing writability, so that a prefix the user
+# owns (~/.local, say) does not needlessly ask for a password.
+if [ ! -d "$BIN_DIR" ]; then
+  mkdir -p "$BIN_DIR" 2>/dev/null || run_privileged mkdir -p "$BIN_DIR"
+fi
+if [ -w "$BIN_DIR" ]; then
   install -m 755 "$BUILD/portveil" "$BIN_DIR/portveil"
 else
-  run_privileged mkdir -p "$BIN_DIR"
   run_privileged install -m 755 "$BUILD/portveil" "$BIN_DIR/portveil"
 fi
 
