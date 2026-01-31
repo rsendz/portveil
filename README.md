@@ -97,6 +97,28 @@ reaches portveil, use `-f` with a libpcap expression instead:
 portveil -i en0 -f "tcp port 443 or udp port 53"
 ```
 
+## What it decodes
+
+Ethernet, the BSD loopback header, and raw IP tunnels at the link layer.
+ARP, IPv4 and IPv6 (walking the common extension headers) at the network
+layer. TCP, UDP, ICMP and ICMPv6 at the transport layer, each field tagged
+with the bytes it occupies.
+
+Above that it reads enough of the payload to make the list useful: DNS
+queries and responses (names, types, and the first answer's address or
+CNAME), TLS records including the SNI out of a ClientHello, and HTTP request
+lines with the `Host` header. QUIC is labelled but not decoded.
+
+## Limits
+
+It trades completeness for staying quick and simple:
+
+- 4,000 packets of history; older ones are dropped
+- frames captured up to 1,536 bytes
+- no TCP stream reassembly, so a header split across segments is not decoded
+- no decryption of TLS payloads
+- no pcap file reading or writing
+
 ## Build from source
 
 Needs CMake 3.22+, a C++20 compiler, and libpcap headers. FTXUI is fetched
