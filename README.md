@@ -6,6 +6,38 @@ Three panes, the way you already know them: a live packet list, a foldable
 protocol tree, and a hex dump that highlights whichever field you have
 selected. One binary, no runtime dependencies.
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rsendz/portveil/main/install.sh | bash
+```
+
+The script installs the build dependencies it needs, compiles, and drops the
+binary in `/usr/local/bin`. Set `PREFIX` to install somewhere else.
+
+Then:
+
+```sh
+sudo portveil
+```
+
+Or from a clone:
+
+```sh
+git clone https://github.com/rsendz/portveil && cd portveil && ./install.sh
+```
+
+## Why sudo
+
+Capturing packets needs raw access to the network device (`/dev/bpf*` on
+macOS, `CAP_NET_RAW` on Linux), which is why every packet analyzer asks for
+elevated privileges. Two ways to avoid typing `sudo` every time:
+
+- **macOS**: install Wireshark's ChmodBPF helper, which puts your user in the
+  `access_bpf` group. `portveil` then runs unprivileged.
+- **Linux**: grant the binary the capability once:
+  `sudo setcap cap_net_raw,cap_net_admin=eip $(command -v portveil)`
+
 ## Usage
 
 ```
