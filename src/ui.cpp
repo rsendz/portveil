@@ -777,6 +777,8 @@ class App {
     if (e == Event::Home || e == Event::Character('g')) return jump(true);
     if (e == Event::End || e == Event::Character('G')) return jump(false);
 
+    if (e == Event::ArrowRight || e == Event::Character('l')) return horizontal(1);
+    if (e == Event::ArrowLeft || e == Event::Character('h')) return horizontal(-1);
     if (focus_ == Pane::Detail && (e == Event::Return || e == Event::Character(' '))) {
       return toggle();
     }
@@ -892,12 +894,29 @@ class App {
     return false;
   }
 
+  // Left and right mean different things per pane: scrolling the packet list
+  // sideways, stepping bytes in the hex pane, folding layers in the tree.
+  bool horizontal(int dir) {
+    switch (focus_) {
+      case Pane::List: {
+        const int visible = std::max(20, box_width(list_box_));
+        const int max_scroll = std::max(0, list_max_width_ - visible);
+        list_hscroll_ = std::clamp(list_hscroll_ + dir * 8, 0, max_scroll);
+        return true;
+      }
+      case Pane::Detail:
+        return expand(dir > 0);
+    }
+    return false;
+  }
+
   bool jump(bool top) {
     switch (focus_) {
       case Pane::List:
         if (shown_.empty()) return true;
         sel_ = top ? 0 : static_cast<int>(shown_.size()) - 1;
         follow_ = !top;
+        list_hscroll_ = top ? 0 : list_hscroll_;
         refresh_detail();
         return true;
       case Pane::Detail:
