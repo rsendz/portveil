@@ -59,6 +59,7 @@ capture on, most useful first.
 | Key | Action |
 | --- | --- |
 | `↑` `↓` / `j` `k` | move the selection |
+| `←` `→` | depends on the pane, see below |
 | `g` / `G` | jump to the first / last row |
 | `PgUp` `PgDn` | page through the list |
 | `Tab` | cycle between the three panes |
@@ -70,6 +71,9 @@ capture on, most useful first.
 | `?` | toggle the key help |
 | `q` | quit |
 
+`←` and `→` do whatever makes sense for the focused pane: scroll the packet
+list sideways when a long Info column runs off the edge, step byte by byte in
+Bytes, and fold or unfold a layer in Details.
 
 The mouse works too: scroll any pane, click a packet to select it, click a
 layer to fold it.
