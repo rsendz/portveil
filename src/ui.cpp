@@ -754,6 +754,7 @@ class App {
     if (e == Event::Custom) return true;
     if (editing_filter_) return filter_event(e);
     if (e.is_mouse()) return mouse_event(e);
+    hex_hover_ = false;
 
     if (e == Event::Character('q')) {
       if (screen_ != nullptr) screen_->Exit();
@@ -850,6 +851,12 @@ class App {
 
     // Bare motion (no button) reads as Mouse::None: treat it as hover, which
     // points the bytes pane without stealing keyboard focus.
+    if (m.button == Mouse::None) {
+      const bool was = hex_hover_;
+      hex_hover_ = in_hex;
+      if (in_hex) return hex_pick(m.x, m.y, false);
+      return was; // redraw once when the pointer leaves
+    }
 
     if (m.button == Mouse::WheelUp || m.button == Mouse::WheelDown) {
       const int delta = m.button == Mouse::WheelUp ? -3 : 3;
