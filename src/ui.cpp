@@ -384,6 +384,32 @@ class App {
 
   std::pair<uint32_t, uint32_t> highlight() const { return range_of(detail_sel_); }
 
+  // Moves the tree selection to the narrowest visible row covering `byte`, so
+  // pointing at a byte names the field it belongs to.
+  void select_field_at(uint32_t byte) {
+    int best = -1;
+    uint32_t best_len = 0;
+    for (size_t i = 0; i < tree_.size(); ++i) {
+      const auto [off, len] = range_of(static_cast<int>(i));
+      if (len == 0 || byte < off || byte >= off + len) continue;
+      if (best < 0 || len < best_len) {
+        best = static_cast<int>(i);
+        best_len = len;
+      }
+    }
+    if (best >= 0) detail_sel_ = best;
+  }
+
+  // Name of whatever the hex cursor is sitting on, for the status bar.
+  std::string cursor_label() const {
+    if (tree_.empty()) return {};
+    const TreeRow& row = tree_[std::clamp(detail_sel_, 0,
+                                          static_cast<int>(tree_.size()) - 1)];
+    const Section& sec = detail_.sections[row.section];
+    if (row.field < 0) return sec.name;
+    return sec.name + " · " + sec.fields[row.field].name;
+  }
+
   void clear_packets() {
     packets_.clear();
     shown_.clear();
@@ -656,6 +682,12 @@ class App {
     }
 
     // While the bytes pane is in play, say what the cursor is pointing at.
+    if (hex_active() && !tree_.empty()) {
+      left.push_back(text("  │ ") | color(th().dim));
+      left.push_back(text(std::format("byte 0x{:04x}", hex_cursor_)) |
+                     color(th().accent) | bold);
+      left.push_back(text(" " + cursor_label()) | color(th().muted));
+    }
 
     return hbox({
                hbox(std::move(left)),
@@ -859,8 +891,27 @@ class App {
         }
         return true;
       }
+      if (in_hex) return hex_pick(m.x, m.y, true);
     }
     return false;
+  }
+
+  // Points the hex cursor at the byte under (x, y).
+  bool hex_pick(int x, int y, bool take_focus) {
+    const Packet* p = selected();
+    if (p == nullptr || p->bytes.empty()) return false;
+    const HexLayout lay{hex_per_row_};
+    const int col = lay.column_at(x - hex_box_.x_min);
+    if (col < 0) return false;
+
+    const int row = hex_scroll_ + (y - hex_box_.y_min);
+    const size_t byte = static_cast<size_t>(row) * lay.per_row + col;
+    if (byte >= p->bytes.size()) return false;
+
+    if (take_focus) focus_ = Pane::Hex;
+    hex_cursor_ = static_cast<uint32_t>(byte);
+    select_field_at(hex_cursor_);
+    return true;
   }
 
   int page() const {
@@ -890,8 +941,20 @@ class App {
         if (len > 0) hex_cursor_ = off;
         return true;
       }
+      case Pane::Hex:
+        return move_hex(delta * hex_per_row_);
     }
     return false;
+  }
+
+  bool move_hex(int delta) {
+    const Packet* p = selected();
+    if (p == nullptr || p->bytes.empty()) return true;
+    const int last = static_cast<int>(p->bytes.size()) - 1;
+    hex_cursor_ = static_cast<uint32_t>(
+        std::clamp(static_cast<int>(hex_cursor_) + delta, 0, last));
+    select_field_at(hex_cursor_);
+    return true;
   }
 
   // Left and right mean different things per pane: scrolling the packet list
@@ -904,6 +967,8 @@ class App {
         list_hscroll_ = std::clamp(list_hscroll_ + dir * 8, 0, max_scroll);
         return true;
       }
+      case Pane::Hex:
+        return move_hex(dir);
       case Pane::Detail:
         return expand(dir > 0);
     }
@@ -922,6 +987,13 @@ class App {
       case Pane::Detail:
         detail_sel_ = top ? 0 : std::max(0, static_cast<int>(tree_.size()) - 1);
         return true;
+      case Pane::Hex: {
+        const Packet* p = selected();
+        if (p == nullptr || p->bytes.empty()) return true;
+        hex_cursor_ = top ? 0 : static_cast<uint32_t>(p->bytes.size()) - 1;
+        select_field_at(hex_cursor_);
+        return true;
+      }
     }
     return false;
   }
