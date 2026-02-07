@@ -78,6 +78,15 @@ Bytes, and fold or unfold a layer in Details.
 The mouse works too: scroll any pane, click a packet to select it, click a
 layer to fold it.
 
+### Reading the bytes
+
+The Details and Bytes panes stay pointed at the same thing from either end.
+Move through the protocol tree and the bytes of the selected field light up.
+Move the cursor in Bytes, or just rest the mouse over a byte with no click
+needed, and the status bar names the field that byte belongs to, like
+`byte 0x001a  Internet Protocol Version 6 · Source`, while the tree jumps to
+that field.
+
 ### Display filters
 
 Press `/` and type space-separated terms. Every term has to match.
