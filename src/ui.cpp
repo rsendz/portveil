@@ -63,6 +63,33 @@ const Theme kDark = {
                  Color::RGB(196, 181, 253), Color::RGB(244, 114, 182)},
 };
 
+const Theme kLight = {
+    .bg = Color::RGB(250, 250, 249),
+    .bar_bg = Color::RGB(226, 232, 240),
+    .accent = Color::RGB(13, 148, 136),
+    .on_accent = Color::RGB(240, 253, 250),
+    .text = Color::RGB(24, 24, 27),
+    .muted = Color::RGB(71, 85, 105),
+    .dim = Color::RGB(120, 130, 145),
+    .warn = Color::RGB(180, 83, 9),
+    .error = Color::RGB(185, 28, 28),
+    .sel_bg = Color::RGB(203, 213, 225),
+    .sel_bg_idle = Color::RGB(230, 236, 243),
+    .hl_bg = Color::RGB(186, 230, 253),
+    .hl_fg = Color::RGB(12, 74, 110),
+    .dns = Color::RGB(14, 116, 144),
+    .tls = Color::RGB(109, 40, 217),
+    .http = Color::RGB(161, 98, 7),
+    .quic = Color::RGB(91, 33, 182),
+    .arp = Color::RGB(100, 116, 139),
+    .icmp = Color::RGB(21, 128, 61),
+    .tcp = Color::RGB(29, 78, 216),
+    .udp = Color::RGB(2, 132, 199),
+    .sections = {Color::RGB(100, 116, 139), Color::RGB(21, 128, 61),
+                 Color::RGB(29, 78, 216), Color::RGB(154, 82, 8),
+                 Color::RGB(109, 40, 217), Color::RGB(190, 24, 93)},
+};
+
 const Theme* g_theme = &kDark;
 const Theme& th() { return *g_theme; }
 
@@ -802,6 +829,10 @@ class App {
       follow_ = true;
       return true;
     }
+    if (e == Event::Character('t')) {
+      g_theme = (g_theme == &kDark) ? &kLight : &kDark;
+      return true;
+    }
 
     if (e == Event::ArrowUp || e == Event::Character('k')) return move(-1);
     if (e == Event::ArrowDown || e == Event::Character('j')) return move(1);
@@ -1103,6 +1134,10 @@ std::optional<std::string> pick_interface(const std::vector<Iface>& ifaces) {
   renderer |= CatchEvent([&](Event e) {
     if (e == Event::Character('q') || e == Event::Escape) {
       screen.Exit();
+      return true;
+    }
+    if (e == Event::Character('t')) {
+      g_theme = (g_theme == &kDark) ? &kLight : &kDark;
       return true;
     }
     if (e == Event::ArrowUp || e == Event::Character('k')) {
