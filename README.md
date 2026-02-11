@@ -6,6 +6,11 @@ Three panes, the way you already know them: a live packet list, a foldable
 protocol tree, and a hex dump that highlights whichever field you have
 selected. One binary, no runtime dependencies.
 
+![portveil in action](docs/demo.gif)
+
+*Recorded on the loopback interface against locally generated traffic, so no
+real network addresses appear in the capture.*
+
 ## Install
 
 ```sh
