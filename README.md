@@ -68,6 +68,7 @@ capture on, most useful first.
 | `p` | pause or resume capture |
 | `c` | clear captured packets |
 | `f` | resume following new packets |
+| `t` | switch between dark and light |
 | `?` | toggle the key help |
 | `q` | quit |
 
